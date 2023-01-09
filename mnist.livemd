@@ -1,0 +1,200 @@
+# Introduction to Elixir with Nx
+
+```elixir
+Mix.install(
+  [
+    {:nx, "~> 0.4.1"},
+    {:exla, "~> 0.2"},
+    {:axon, "~> 0.3.0"},
+    {:tokenizers, "~> 0.2.0"},
+    {:vega_lite, "~> 0.1.6"},
+    {:kino, "~> 0.7.0"},
+    {:kino_vega_lite, "~> 0.1.7"}
+  ],
+  config: [
+    nx: [default_backend: EXLA.Backend]
+  ]
+)
+
+alias VegaLite, as: Vl
+```
+
+## Introduction
+
+These are some ML experiments in Elixir / Livebook.
+
+## Data Preparation
+
+Here we read the data files and unzip them in memory.
+
+```elixir
+images_data = File.read!("mnist/train-images-idx3-ubyte.gz") |> :zlib.gunzip()
+labels_data = File.read!("mnist/train-labels-idx1-ubyte.gz") |> :zlib.gunzip()
+```
+
+Pattern-match on the binary data to extract the relevant parts of the file.
+
+```elixir
+<<_::32, n_images::32, width::32, height::32, images::binary>> = images_data
+bytes_per_image = width * height
+
+<<_::32, n_labels::32, labels::binary>> = labels_data
+```
+
+Now we extract the images and labels from the binary data into proper batched lists
+
+```elixir
+all_images =
+  images
+  |> Nx.from_binary({:u, 8})
+  |> Nx.reshape({n_images, bytes_per_image}, names: [:batch, :input])
+  |> Nx.to_batched(30)
+
+all_labels =
+  labels
+  |> Nx.from_binary({:u, 8})
+  |> Nx.reshape({n_labels, 1}, names: [:batch, :output])
+  |> Nx.equal(Nx.tensor(Enum.to_list(0..9)))
+  |> Nx.to_batched(30)
+```
+
+## The ML model
+
+Creating the model is really simple:
+
+```elixir
+model =
+  Axon.input("input", shape: {nil, bytes_per_image})
+  |> Axon.dense(128, activation: :relu)
+  |> Axon.dropout(rate: 0.5)
+  |> Axon.dense(10, activation: :softmax)
+```
+
+```elixir
+model |> Axon.Display.as_graph(Nx.template({30, 784}, :f32))
+```
+
+Training the model using Axon is just a matter of specifying the loss function
+and the optimizer (Adam in this case):
+
+```elixir
+epoch_frame = Kino.Frame.new()
+
+chart =
+  Vl.new(width: 200, height: 200)
+  |> Vl.data_from_values([])
+  |> Vl.encode_field(:x, "iteration",
+    type: :quantitative,
+    title: "Iteration",
+    scale: [domain: [0, 2000]]
+  )
+  |> Vl.layers([
+    Vl.new()
+    |> Vl.mark(:line, color: :red)
+    |> Vl.encode_field(:y, "loss",
+      type: :quantitative,
+      scale: [domain: [0, 10]],
+      title: "Loss"
+    ),
+    Vl.new()
+    |> Vl.mark(:line, color: :blue)
+    |> Vl.encode_field(:y, "accuracy",
+      type: :quantitative,
+      scale: [domain: [0, 1]],
+      title: "Accuracy"
+    )
+  ])
+  |> Vl.resolve(:scale, y: :independent)
+  |> Kino.VegaLite.new()
+
+add_chart_data = fn iteration, loss, acc ->
+  if rem(iteration, 50) == 0 do
+    Kino.VegaLite.push(chart, %{
+      iteration: iteration,
+      loss: min(Nx.to_number(loss), 10),
+      accuracy: Nx.to_number(acc)
+    })
+  end
+end
+
+update_epoch = fn epoch ->
+  epoch_frame |> Kino.Frame.render(Kino.Markdown.new("### Epoch #{epoch}"))
+end
+
+Kino.Frame.render(epoch_frame, Kino.Markdown.new("Training not yet started..."))
+Kino.Layout.grid([epoch_frame, chart])
+```
+
+```elixir
+params =
+  model
+  |> Axon.Loop.trainer(:categorical_cross_entropy, :adam)
+  |> Axon.Loop.metric(:accuracy, "accuracy")
+  |> Axon.Loop.handle(
+    :epoch_started,
+    fn %{epoch: epoch} = state ->
+      update_epoch.(epoch)
+      Kino.VegaLite.clear(chart)
+      {:continue, state}
+    end
+  )
+  |> Axon.Loop.handle(
+    :iteration_completed,
+    fn %{metrics: %{"loss" => loss, "accuracy" => acc}, iteration: iteration} = state ->
+      add_chart_data.(iteration, Nx.to_number(loss), Nx.to_number(acc))
+      {:continue, state}
+    end
+  )
+  |> Axon.Loop.run(Stream.zip(all_images, all_labels), %{}, epochs: 10, compiler: EXLA)
+```
+
+Now we just need to test the model. Let's take the first batch of images:
+
+```elixir
+first_batch = all_images |> Enum.at(0)
+```
+
+and then run the prediction on each image in the batch:
+
+```elixir
+output = Axon.predict(model, params, first_batch)
+```
+
+We get the output for each image, but we want to know which element in the output has the highest value. We use `Nx.argmax` for that:
+
+```elixir
+predictions = Nx.argmax(output, axis: 1)
+```
+
+```elixir
+expected = all_labels |> Enum.at(0) |> Nx.argmax(axis: 1)
+```
+
+```elixir
+predictions |> Nx.equal(expected) |> Nx.sum() |> Nx.divide(30)
+```
+
+```elixir
+first_batch |> Nx.reshape({30, 28, 28}) |> Nx.to_heatmap()
+```
+
+<!-- livebook:{"branch_parent_index":0} -->
+
+## Tokenizers
+
+```elixir
+{:ok, tokenizer} = Tokenizers.Tokenizer.from_pretrained("xlm-roberta-base")
+{:ok, encoding} = Tokenizers.Tokenizer.encode(tokenizer, "Hello there!")
+```
+
+```elixir
+Tokenizers.Tokenizer.get_vocab_size(tokenizer)
+```
+
+```elixir
+{:ok, tokens} =
+  Tokenizers.Tokenizer.encode(tokenizer, "Quelle est la date limite de cotisation a un REER!")
+
+padded = Tokenizers.Encoding.pad(tokens, 20)
+Tokenizers.Encoding.get_ids(padded) |> Nx.tensor()
+```

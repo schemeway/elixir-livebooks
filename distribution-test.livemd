@@ -1,0 +1,131 @@
+# Test de distribution
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.8.0"}
+])
+```
+
+## D'abord, se connecter
+
+Chaque noeud du _cluster_ a un nom:
+
+```elixir
+local = node()
+```
+
+On voit donc que, par défaut, Livebook tourne en cluster sur la machine locale (ici `MacBook-Air-de-Dominique`).
+
+On peut voir quels sont les autres noeuds dans le cluster:
+
+```elixir
+Node.list(:hidden)
+```
+
+Il y a donc un autres noeud dans le cluster:
+
+* `livebook_XYZ@MacBook-Air-de-Dominique` est la VM où tourne Livebook lui-même
+
+Graphiquement:
+
+```elixir
+[lb] = Node.list(:hidden)
+
+Kino.Mermaid.new("""
+graph LR
+    LB(#{inspect(Atom.to_string(lb))}) <--> B1(#{inspect(Atom.to_string(local))})
+    subgraph Books
+      B1
+  end
+""")
+```
+
+Copions maintenant le nom du noeud du livre maître dans la boîte de saisie:
+
+```elixir
+node_name = Kino.Input.text("Entrer la valeur copiée précédemment:")
+```
+
+```elixir
+other_node = Kino.Input.read(node_name) |> String.to_atom()
+Node.connect(other_node)
+Node.list(:hidden)
+```
+
+Il y a donc maintenant 3 noeuds au total dans le cluster:
+
+* Le noeud courant
+* `livebook_XYZ@MacBook-Air-de-Dominique` est la VM où tourne Livebook lui-même
+* L'autre noeud `ABC-livebook_XYZ@MacBook-Air-de-Dominique` est la VM utilisée pour le livre maître.
+
+Graphiquement:
+
+```elixir
+[third_node] = Node.list(:hidden) |> Enum.filter(fn n -> n != lb end)
+
+Kino.Mermaid.new("""
+flowchart LR
+    LB(#{inspect(Atom.to_string(lb))}) <--> B1(#{inspect(Atom.to_string(local))})
+    LB <--> B2(#{inspect(Kino.Input.read(node_name))})
+    subgraph Books
+      B1 
+      B2
+    end
+""")
+```
+
+Le code du module n'est pas chargé localement, dans la VM du livre en cours. Pour s'en convaincre:
+
+```elixir
+PingServer.start()
+```
+
+## Démarrage sur VM distante
+
+* **On démarre le serveur sur l'autre noeud**
+
+* **On obtient la sortie standard localement**
+
+```elixir
+server = Node.spawn(other_node, PingServer, :loop, [0])
+Process.monitor(server)
+:ok
+```
+
+* **On envoie un `:ping` au serveur, sur l'autre VM**
+
+* **Le serveur nous répond, évidemment!**
+
+```elixir
+me = self()
+send(server, {:ping, me})
+
+receive do
+  msg -> msg
+after
+  1_000 ->
+    :error
+end
+```
+
+* **On peut explorer le runtime de la VM en temps-réel**
+
+* **Et se connecter sur les autres VMs également**
+
+  * Locales à la machine ou sur d'autres machines!
+
+```elixir
+:observer.start()
+```
+
+* **On peut même monitorer les processus distants**
+
+```elixir
+send(server, :stop)
+
+receive do
+  msg -> msg
+end
+```
+
+On peut maintenant revenir à la [présentation](intro-to-elixir.livemd#remarques-finales).

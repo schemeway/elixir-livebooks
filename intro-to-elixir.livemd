@@ -1,0 +1,289 @@
+# Une introduction (rapide) à Elixir
+
+```elixir
+Mix.install([
+  {:kino, "~> 0.8.0"},
+  {:kino_vega_lite, "~> 0.1.7"}
+])
+```
+
+## C'est quoi, Elixir?
+
+* **Langage de programmation fonctionnel**
+
+  * Peut être déroutant!
+
+* **Concurrence basée sur le modèle d'acteur**
+
+  * Les processus (threads) communiquent par passage de messages
+
+* **Environnement distribué**
+
+  * Idéal pour les applications haute-disponibilité, tolérantes aux fautes
+
+Voici un premier exemple, un module contenant une fonction implantant la fonction de Fibonacci, dont la définition usuelle est:
+
+$$
+f(n) = 
+\begin{dcases}
+  0, &  \text{if $n$ = 0} \\
+  1, &  \text{if $n$ = 1} \\
+f(n - 1) + f(n - 2), &  \text{sinon}
+\end{dcases}
+$$
+Un premier exemple:
+
+```elixir
+defmodule Demo do
+  def fib(0), do: 0
+  def fib(1), do: 1
+
+  def fib(n) when n > 1 do
+    fib(n - 2) + fib(n - 1)
+  end
+end
+
+Demo.fib(15)
+```
+
+Une version plus efficace, utilisant la récursivité terminale (optimisée):
+
+```elixir
+defmodule Demo2 do
+  def fib(n) when n >= 0 do
+    fib_acc(n, 0, 1)
+  end
+
+  def fib_acc(0, result, _) do
+    result
+  end
+
+  def fib_acc(n, acc1, acc2) do
+    fib_acc(n - 1, acc2, acc1 + acc2)
+  end
+end
+
+result = Demo2.fib(50_000)
+```
+
+```elixir
+Integer.to_string(result) |> String.length()
+```
+
+Et maintenant, un petit exemple avec des listes:
+
+```elixir
+defmodule FizzBuzz do
+  @rules [{3, "fizz"}, {5, "buzz"}]
+
+  def fizzbuzz(n) do
+    for i <- 1..n do
+      process(i, @rules)
+    end
+  end
+
+  def process(n, rules) do
+    n
+    |> apply_rules(rules)
+    |> check_empty(n)
+    |> IO.puts()
+  end
+
+  def apply_rule(n, {divisor, text}) do
+    case rem(n, divisor) do
+      0 -> text
+      _ -> ""
+    end
+  end
+
+  def apply_rules(n, rules) do
+    rules
+    |> Enum.map(fn rule -> apply_rule(n, rule) end)
+    |> Enum.join()
+  end
+
+  def check_empty("", n), do: n
+  def check_empty(text, _), do: text
+end
+
+FizzBuzz.fizzbuzz(20)
+```
+
+## La concurrence - modèle d'acteur
+
+* **Les "threads" sont appelés "processus"**
+  * Ils sont très légers
+  * On peut en démarrer des milliers (ou millions) sur une machine standard
+
+```elixir
+for _ <- 1..1_000_000 do
+  spawn(fn -> :ok end)
+end
+```
+
+* **Les processus communiquent par envoi de messages**
+
+  * Les messsages sont asynchrones
+  * La synchronisation doit être explicite
+
+* **Pas de mémoire partagée (les messages sont copiés)**
+
+* **Chaque processus a son propre garbage collector**
+
+```elixir
+parent = self()
+
+process =
+  spawn(fn ->
+    receive do
+      :ping -> send(parent, :pong)
+    end
+  end)
+
+send(process, :ping)
+
+receive do
+  :pong -> :ponged!
+end
+```
+
+On peut suivre les messages et afficher un diagramme de séquence directement ici:
+
+```elixir
+parent = self()
+
+Kino.Process.render_seq_trace(fn ->
+  process =
+    spawn(fn ->
+      receive do
+        {:ping, sender} -> send(sender, :pong)
+      end
+    end)
+
+  send(process, {:ping, parent})
+
+  receive do
+    :pong -> :ponged!
+  end
+end)
+```
+
+* **Le code d'un processus est fonctionnel**
+
+* **L'état du processus doit être explicite**
+
+* **Un serveur a généralement la forme suivante:**
+
+  1. Initialisation de l'état
+  2. Attente d'un message
+  3. Traitement du message
+  4. On retourne à 2 de manière récursive (terminale)
+
+```elixir
+defmodule PingServer do
+  require Logger
+
+  # 1. Initialisation
+  def start() do
+    Logger.info("Starting server!")
+    spawn(fn -> loop(0) end)
+  end
+
+  def loop(counter) do
+    # 2. Attente d'un message
+    receive do
+      {:ping, sender} ->
+        # 3. traitement du message
+        new_counter = counter + 1
+        send(sender, {:pong, new_counter})
+        # 4. appel recursif terminal
+        loop(new_counter)
+
+      :stop ->
+        Logger.info("Stopping server!")
+        :done
+    end
+  end
+end
+
+server = PingServer.start()
+parent = self()
+
+send(server, {:ping, parent})
+
+receive do
+  {:pong, val} -> IO.puts(val)
+end
+
+send(server, {:ping, parent})
+
+receive do
+  {:pong, val} -> IO.puts(val)
+end
+```
+
+## Supervision - des systèmes qui s'auto-guérissent
+
+* **On peut monitorer l'état des processus**
+  * Permet de savoir quand ils meurent
+
+```elixir
+server
+```
+
+```elixir
+Process.monitor(server)
+send(server, :stop)
+
+receive do
+  msg -> msg
+end
+```
+
+* **Permet d'implanter des arbres de supervision**
+
+  * Les feuilles de l'arbre sont les processus qui effectuent le travail
+  * Les noeuds internes sont des superviseurs (et superviseurs de superviseurs)
+
+* **Les superviseurs ont des stratégies de redémarrage pour leurs enfants directs**
+
+* **Chaque application a son propre arbre de supervision**
+
+  * application = microservice
+
+```elixir
+Application.loaded_applications()
+```
+
+```elixir
+Kino.Process.app_tree(:kino)
+```
+
+## La distribution
+
+* **Un système Elixir peut être distribué**
+
+* **Les mécanismes vus précédemment fonctionnent de manière (presque) complètement transparente**
+
+<!-- livebook:{"break_markdown":true} -->
+
+Voici le noeud (VM) sur lequel le code est évalué:
+
+```elixir
+node()
+```
+
+Pour continuer, il faut copier la valeur résultante (ce qui se trouve à l'intérieur des guillements), et aller consulter le [test de distribution](distribution-test.livemd), qui tourne dans une autre VM.
+
+## Remarques finales
+
+* **Quels sont les bons cas d'utilisation?**
+  * Applications de communication distribuées (ex. WhatsApp, Discord, etc.)
+  * Applications/services web haute-performance, hautement interactives
+    * Livebook!
+  * Data processing
+    * Excellentes librairies ([Broadway](https://github.com/dashbitco/broadway), ...)
+  * Apprentissage Machine???? 
+    * L'écosystème se met en place ([Nx](https://github.com/elixir-nx/nx), [Explorer](https://github.com/elixir-nx/explorer), [Axon](https://github.com/elixir-nx/axon), [BubbleBee](https://github.com/elixir-nx/bumblebee), ...)
+    * Intégrations avec Google XLA (GPUs, TPUs), HuggingFace, PyTorch, etc.
+    * [Exemple avec MNIST](mnist.livemd)
