@@ -1,4 +1,4 @@
-# Introduction to Elixir with Nx
+# Introduction NX - MNIST
 
 ```elixir
 Mix.install(
@@ -22,11 +22,11 @@ alias VegaLite, as: Vl
 
 ## Introduction
 
-These are some ML experiments in Elixir / Livebook.
+These are some ML experiments in Elixir / Livebook with Axon.
 
 ## Data Preparation
 
-Here we read the data files and unzip them in memory.
+Here we load the data files for both the train set and the test set.
 
 ```elixir
 {train_images_data, train_labels_data} = Scidata.MNIST.download()
@@ -35,7 +35,7 @@ Here we read the data files and unzip them in memory.
 {train_images_data, train_labels_data, test_images_data, test_labels_data}
 ```
 
-Pattern-match on the binary data to extract the relevant parts of the file.
+We then do some pattern-matching on the binary results to extract the relevant parts.
 
 ```elixir
 {images, _type, {n_images, 1, width, height}} = train_images_data
@@ -45,7 +45,7 @@ Pattern-match on the binary data to extract the relevant parts of the file.
 {test_labels, _type, {n_test_labels}} = test_labels_data
 ```
 
-Now we extract the images and labels from the binary data into proper batched lists
+Now we extract the images and labels from the binary data into proper batched lists:
 
 ```elixir
 bytes_per_image = width * height
@@ -64,7 +64,7 @@ train_labels =
   |> Nx.to_batched(30)
 ```
 
-Let's do the same for the test data:
+Let's do the same for the test data, but without batching:
 
 ```elixir
 test_images =
@@ -86,8 +86,7 @@ Creating the model is really simple:
 ```elixir
 model =
   Axon.input("input", shape: {nil, bytes_per_image})
-  |> Axon.dense(256, activation: :relu)
-  |> Axon.dropout(rate: 0.5)
+  |> Axon.dense(128, activation: :relu)
   |> Axon.dense(10, activation: :softmax)
 ```
 
@@ -95,8 +94,7 @@ model =
 model |> Axon.Display.as_graph(Nx.template({30, 784}, :f32))
 ```
 
-Training the model using Axon is just a matter of specifying the loss function
-and the optimizer (Adam in this case):
+Let's define a graph that will dynamically show the progression of the training process:
 
 ```elixir
 epoch_frame = Kino.Frame.new()
@@ -142,11 +140,6 @@ update_epoch = fn epoch ->
   epoch_frame |> Kino.Frame.render(Kino.Markdown.new("### Epoch #{epoch}"))
 end
 
-Kino.Frame.render(epoch_frame, Kino.Markdown.new("Training not yet started..."))
-Kino.Layout.grid([epoch_frame, chart])
-```
-
-```elixir
 start_epoch = fn %{epoch: epoch} = state ->
   update_epoch.(epoch)
   Kino.VegaLite.clear(chart)
@@ -159,6 +152,14 @@ complete_iteration = fn %{metrics: %{"loss" => loss, "accuracy" => acc}, iterati
   {:continue, state}
 end
 
+Kino.Frame.render(epoch_frame, Kino.Markdown.new("Training not yet started..."))
+Kino.Layout.grid([epoch_frame, chart])
+```
+
+Training the model using Axon is just a matter of specifying the loss function
+and the optimizer (the Adam optimizer in this case):
+
+```elixir
 params =
   model
   |> Axon.Loop.trainer(:categorical_cross_entropy, :adam)
