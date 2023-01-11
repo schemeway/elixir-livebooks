@@ -26,13 +26,9 @@ Voici un premier exemple, un module contenant une fonction implantant la fonctio
 $$
 f(n) = 
   \begin{dcases}
-
-```
-0, &  \text{if $n$ = 0} \\
-1, &  \text{if $n$ = 1} \\
-```
-
-f(n - 1) + f(n - 2), &  \text{sinon}
+   0, &  \text{if $n$ = 0} \\
+   1, &  \text{if $n$ = 1} \\
+   f(n - 1) + f(n - 2), &  \text{sinon}
  \end{dcases}
 $$
 
